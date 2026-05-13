@@ -2,11 +2,15 @@ import type { NextConfig } from "next";
 import path from "path";
 import { fileURLToPath } from "url";
 
-// Monorepo root (as-platform). Next otherwise picks the wrong workspace root when
-// a stray package-lock.json exists under this app; also stabilizes file tracing.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Monorepo root only inside E2B (`envs` on Sandbox.create). Omit on Vercel / Render / Railway / Amplify.
+const isE2bSandbox = process.env.E2B_SANDBOX === "true";
+
 const nextConfig: NextConfig = {
+  ...(isE2bSandbox
+    ? { outputFileTracingRoot: path.join(__dirname, "..", "..") }
+    : {}),
   reactStrictMode: true,
   webpack: (config, { dev }) => {
     if (dev) {
@@ -15,9 +19,9 @@ const nextConfig: NextConfig = {
       // survives snapshot restore, ensuring HMR + Tailwind CSS recompilation
       // fires correctly when sandbox.files.write() writes new page files.
       config.watchOptions = {
-        poll: 1000,           // Reduced from 500ms to lower CPU usage
+        poll: 1000, // Reduced from 500ms to lower CPU usage
         aggregateTimeout: 300,
-        ignored: ['**/node_modules/**', '**/.next/**', '**/.git/**'],
+        ignored: ["**/node_modules/**", "**/.next/**", "**/.git/**"],
       };
     }
     return config;
