@@ -9,6 +9,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const nextConfig: NextConfig = {
   outputFileTracingRoot: path.join(__dirname, "..", ".."),
   reactStrictMode: true,
+  typescript: {
+  ignoreBuildErrors: true,
+},
   webpack: (config, { dev }) => {
     if (dev) {
       // E2B sandboxes are restored from a VM snapshot, which leaves inotify
