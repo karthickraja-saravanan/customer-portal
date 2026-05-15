@@ -22,14 +22,24 @@
  * middleware reads the session via `getToken` from `next-auth/jwt`
  * directly — there is no `auth()` helper to import (that's an App
  * Router pattern). NextAuth v5 (Auth.js) requires explicit `salt`
- * matching the cookie name (`authjs.session-token` over HTTP,
- * `__Secure-authjs.session-token` over HTTPS).
+ * matching the session cookie name (`authjs.session-token` vs
+ * `__Secure-authjs.session-token`). `fallbackSecure` guesses from
+ * `AUTH_URL` / `NEXTAUTH_URL` and `req.nextUrl.protocol`; when both
+ * disagree with the cookie NextAuth actually set, `resolveAuthJsSessionCookieMode`
+ * prefers whichever session cookie is present on the request.
  */
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
+import { resolveAuthJsSessionCookieMode } from "@/lib/auth-session-cookie";
 
-const SECRET = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "";
+function getAuthSecret(): string {
+  return (
+    process.env.AUTH_SECRET ??
+    process.env.NEXTAUTH_SECRET ??
+    ""
+  ).trim();
+}
 
 /**
  * Path prefixes that require an authenticated session at the
@@ -85,19 +95,23 @@ export default async function middleware(req: NextRequest) {
   //    Fly, …). Next.js sees the internal forwarded request, not
   //    the external scheme.
   //
-  // So neither `req.url` nor `req.nextUrl.protocol` is reliable for
-  // secure-cookie detection here. Source of truth: the platform's
-  // `AUTH_URL` / `NEXTAUTH_URL` env vars — the rewriter sets these
-  // to the actual sandbox preview origin (`https://3000-….e2b.app`).
-  // If the env URL starts with `https://`, we issued (and must read)
-  // the `__Secure-authjs.session-token` cookie + matching JWE salt.
+  // So neither `req.url` nor `req.nextUrl.protocol` is reliable alone.
+  // `fallbackSecure` combines env (`AUTH_URL` / `NEXTAUTH_URL`, set by
+  // the platform rewriter to the sandbox origin) with the request URL
+  // protocol. `resolveAuthJsSessionCookieMode` then prefers whichever
+  // session cookie exists on the wire when env and browser disagree.
   const envUrl =
     process.env.AUTH_URL ?? process.env.NEXTAUTH_URL ?? "";
-  const isHttps =
+  const fallbackSecure =
     envUrl.startsWith("https://") || req.nextUrl.protocol === "https:";
+  const { secureCookie, salt } = resolveAuthJsSessionCookieMode({
+    getCookie: (name) => req.cookies.get(name)?.value,
+    fallbackSecure,
+  });
+  const secret = getAuthSecret();
   let session: { sub?: string } | null = null;
   let decryptError: string | null = null;
-  if (SECRET) {
+  if (secret) {
     try {
       // NextRequest is an Edge runtime variant; getToken's typed `req`
       // accepts it via the `Request` branch but TS strict mode prefers
@@ -105,23 +119,18 @@ export default async function middleware(req: NextRequest) {
       // string>` mismatch on the headers shape.
       //
       // `salt` is REQUIRED for v5 JWE decryption: it must equal the
-      // session cookie name (`__Secure-authjs.session-token` over
-      // HTTPS, `authjs.session-token` over HTTP). NextAuth's signin
-      // handler encrypts with this exact name as the salt, so the
-      // middleware MUST pass it explicitly — without it `getToken`
-      // silently decrypts to null and every protected route bounces
-      // to /login even after a valid sign-in. The header comment for
-      // this file already noted the requirement; the call site
-      // shipped without it and broke every app's session check.
-      const cookieName = isHttps
-        ? "__Secure-authjs.session-token"
-        : "authjs.session-token";
+      // session cookie name NextAuth used at sign-in. Without a
+      // matching `salt` + `secureCookie`, `getToken` silently decrypts
+      // to null and protected routes bounce to /login.
+      //
+      // `cookieName` must match `salt` so SessionStore aggregates `.0`, `.1`, … chunks.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       session = (await getToken({
         req: req as unknown as Parameters<typeof getToken>[0]['req'],
-        secret: SECRET,
-        secureCookie: isHttps,
-        salt: cookieName,
+        secret,
+        secureCookie,
+        salt,
+        cookieName: salt,
       })) as any;
     } catch (err) {
       decryptError = err instanceof Error ? err.message : String(err);
@@ -136,13 +145,19 @@ export default async function middleware(req: NextRequest) {
   console.warn(
     `[middleware] redirect ${pathname} → /login`,
     JSON.stringify({
-      hasSecret: !!SECRET,
-      secretLen: SECRET ? SECRET.length : 0,
-      isHttps,
+      hasSecret: !!secret,
+      secretLen: secret ? secret.length : 0,
+      fallbackSecure,
+      secureCookie,
+      salt,
       protocol: req.nextUrl.protocol,
       cookieKeys: Array.from(req.cookies.getAll()).map((c) => c.name),
-      secureTokenPresent: !!req.cookies.get("__Secure-authjs.session-token"),
-      bareTokenPresent: !!req.cookies.get("authjs.session-token"),
+      secureTokenPresent:
+        !!req.cookies.get("__Secure-authjs.session-token") ||
+        !!req.cookies.get("__Secure-authjs.session-token.0"),
+      bareTokenPresent:
+        !!req.cookies.get("authjs.session-token") ||
+        !!req.cookies.get("authjs.session-token.0"),
       sessionResult: session === null ? "null" : "object",
       sessionSub: session?.sub ?? null,
       decryptError,

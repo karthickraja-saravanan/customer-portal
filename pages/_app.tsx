@@ -1,8 +1,7 @@
 import type { AppProps } from "next/app";
 import { Inter } from "next/font/google";
 import { useEffect } from "react";
-import { SessionProvider } from "next-auth/react";
-import "../styles/globals.css";
+import "../app/globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -41,20 +40,13 @@ function shouldForwardToParent(formatted: string): boolean {
     m.includes("Module not found") ||
     m.includes("Expected") ||
     m.includes("Unexpected token") ||
-    m.includes("SyntaxError") ||
-    // Route collisions: Next.js throws this from page-bootstrap.js when two
-    // files claim the same URL (e.g. pages/foo.ts vs pages/foo/index.ts).
-    // The parent overlay has a dedicated UI + delete button for this class;
-    // it was being silently dropped here because the whitelist didn't cover
-    // it.
-    m.includes("Conflicting app and page file")
+    m.includes("SyntaxError")
   ) {
     return true;
   }
   return false;
 }
 
-/** Do not forward a headline-only line; the _document overlay bridge posts the full Turbopack panel. */
 function isVagueOnlyHeadline(formatted: string): boolean {
   const t = formatted.trim();
   return /^(Parsing ecmascript|Build Error|Runtime Error)\s*$/i.test(t);
@@ -87,9 +79,7 @@ function useErrorReporter() {
     const send = (msg: string, stack?: string) => {
       try {
         window.parent?.postMessage({ type: "__AS_RUNTIME_ERROR__", message: msg, stack }, "*");
-      } catch {
-        /* ignore */
-      }
+      } catch {}
     };
     const onError = (e: ErrorEvent) =>
       send(e.message + (e.filename ? `\n  at ${e.filename}:${e.lineno}` : ""), e.error?.stack);
@@ -109,16 +99,9 @@ function useErrorReporter() {
 
 export default function App({ Component, pageProps }: AppProps) {
   useErrorReporter();
-  // SessionProvider lets `useSession()` work across the app. The
-  // NextAuth handler is provisioned at `pages/api/auth/[...nextauth].ts`
-  // (Pages Router; locked, platform-managed). `pageProps.session` is
-  // populated by NextAuth when present; otherwise SessionProvider
-  // fetches it client-side on mount.
   return (
-    <SessionProvider session={pageProps.session}>
-      <main className={`${inter.variable} font-sans antialiased`}>
-        <Component {...pageProps} />
-      </main>
-    </SessionProvider>
+    <main className={`${inter.variable} font-sans antialiased`}>
+      <Component {...pageProps} />
+    </main>
   );
 }

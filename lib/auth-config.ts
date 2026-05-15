@@ -136,11 +136,11 @@ export const authConfig: NextAuthConfig = {
   // default everywhere.
   cookies: {
     sessionToken: {
-      name: "authjs.session-token",
+      name: "__Secure-authjs.session-token",
       options: {
         httpOnly: true,
         sameSite: "none",
-        secure: false,
+        secure: true,
         path: "/",
       },
     },
@@ -149,15 +149,15 @@ export const authConfig: NextAuthConfig = {
       options: {
         httpOnly: true,
         sameSite: "none",
-        secure: false,
+        secure: true,
         path: "/",
       },
     },
     callbackUrl: {
-      name: "authjs.callback-url",
+      name: "__Secure-authjs.callback-url",
       options: {
         sameSite: "none",
-        secure: false,
+        secure: true,
         path: "/",
       },
     },
@@ -180,44 +180,22 @@ export const authConfig: NextAuthConfig = {
     async jwt({ token, user }) {
       if (user?.id) {
         try {
-          // Read role from users.role. If null (Google OAuth users
-          // never go through the signup endpoint, so the @auth/pg-
-          // adapter inserts a row with role=NULL), atomically default
-          // to 'user' via COALESCE so subsequent role-gated routes
-          // can pass authorize() instead of throwing
-          // "User has no role assigned — complete onboarding first."
-          // every protected request.
-          //
-          // The COALESCE-UPDATE is racy-safe: if two concurrent first
-          // sign-ins fire, both write 'user' (idempotent) and both
-          // read the same final value.
           const result = await pool.query<{ role: string | null }>(
-            `UPDATE users
-                SET role = COALESCE(role, 'user')
-              WHERE id = $1
-              RETURNING role`,
+            `SELECT role FROM users WHERE id = $1 LIMIT 1`,
             [user.id],
           );
           const row = result.rows[0];
-          if (row?.role) {
+          if (row) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             (token as any).role = row.role;
-          } else {
-            // Defensive fallback if the UPDATE returned no rows
-            // (user deleted mid-sign-in, etc.). Token still gets a
-            // role so authorize() doesn't throw on the next request.
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (token as any).role = "user";
           }
         } catch (err) {
-          // Role lookup/assignment failed (DB hiccup, race against
-          // migration). Log but don't crash — assign 'user' on the
-          // token so the protected route can still run with the
-          // baseline role instead of 403ing on a transient DB blip.
+          // Role lookup failed (DB hiccup, race against migration).
+          // Log but don't crash — the JWT still issues; role-gated
+          // routes will 403 with a clear message instead of 500ing
+          // the entire login flow.
           // eslint-disable-next-line no-console
           console.error("[auth] role lookup failed:", err);
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (token as any).role = "user";
         }
       }
       return token;
